@@ -6,7 +6,7 @@ local opt = vim.opt
 local keymap = vim.keymap.set
 
 -- internal vars
-local macroRegs, slotIndex, defaultLogLevel, breakCounter
+local config, macroRegs, slotIndex, defaultLogLevel, breakCounter
 
 -- Use this function to normalize keycodes (which can have multiple
 -- representations, e.g. <C-f> or <C-F>).
@@ -111,7 +111,7 @@ local function playRecording()
 			"essential",
 			vim.log.levels.ERROR
 		)
-		normal("q") -- end recording
+		normal("q")   -- end recording
 		setMacro(reg, "") -- empties macro since the recursion has been recorded there
 		return
 	end
@@ -149,13 +149,13 @@ local function playRecording()
 			breakCounter = 0
 		end
 
-	-- macro (w/ perf optimizations)
+		-- macro (w/ perf optimizations)
 	elseif usePerfOptimizations then
 		-- message to avoid confusion by the user due to performance optimizations
 		local msg = "Running macro with performance optimizations…"
 		if perf.lazyredraw then
 			msg = msg
-				.. "\nnvim might appear to freeze due to lazy redrawing. \nThis is to be expected and not a bug."
+				 .. "\nnvim might appear to freeze due to lazy redrawing. \nThis is to be expected and not a bug."
 		end
 		notify(msg, "nonessential", nil, { animate = false }) -- no animation as macro will be blocking
 
@@ -181,7 +181,7 @@ local function playRecording()
 			opt.eventignore = original.eventignore
 		end, 500)
 
-	-- macro (regular)
+		-- macro (regular)
 	else
 		normal(v.count1 .. "@" .. reg)
 	end
@@ -271,12 +271,18 @@ end
 ---@field slots string[] named register slots
 ---@field clear boolean whether to clear slots/registers on setup
 ---@field timeout number Default timeout for notification
+---@field text textOpts individual mappings
 ---@field mapping maps individual mappings
 ---@field logLevel integer log level (vim.log.levels)
 ---@field lessNotifications boolean plugin is less verbose, shows only essential or critical notifications
 ---@field performanceOpts perfOpts various performance options
 ---@field dapSharedKeymaps boolean (experimental) partially share keymaps with dap
 ---@field useNerdfontIcons boolean currently only relevant for status bar components
+
+---@class textOpts -- we could later add options for customizing notifications
+---@field recording string
+---@field recorded string
+---@field disableSlots boolean -- if true we won't show slots, nor recorded message
 
 ---@class perfOpts
 ---@field countThreshold number if count used is higher than threshold, the following performance optimizations are applied
@@ -323,13 +329,27 @@ function M.setup(userConfig)
 			autocmdEventsIgnore = { "TextChangedI", "TextChanged", "InsertLeave", "InsertEnter", "InsertCharPre" },
 		},
 	}
-	local config = vim.tbl_deep_extend("keep", userConfig, defaultConfig)
+	config = vim.tbl_deep_extend("keep", userConfig, defaultConfig)
 
 	-- settings to be used globally
 	perf = config.performanceOpts
 	useNerdfontIcons = config.useNerdfontIcons
 	lessNotifications = config.lessNotifications
 	defaultLogLevel = config.logLevel
+
+	local icon = useNerdfontIcons and "  " or ""
+	local recordedIcon = useNerdfontIcons and "󰃽 " or "RECs "
+
+	local appendDefaultConfig = {
+		text = {
+			recording = icon .. "Recording…",
+			recorded = recordedIcon,
+			disableSlots = false,
+		},
+	}
+
+	-- not sure if most optimal way of doing things
+	config = vim.tbl_deep_extend("keep", userConfig, defaultConfig, appendDefaultConfig)
 
 	-- validate macro slots
 	macroRegs = config.slots
@@ -350,7 +370,6 @@ function M.setup(userConfig)
 	-- setup keymaps
 	toggleKey = config.mapping.startStopRecording
 	breakPointKey = normalizeKeycodes(config.mapping.addBreakPoint)
-	local icon = config.useNerdfontIcons and " " or ""
 	local dapSharedIcon = config.useNerdfontIcons and " /  " or ""
 
 	keymap("n", toggleKey, toggleRecording, { desc = icon .. "Start/Stop Recording" })
@@ -358,7 +377,8 @@ function M.setup(userConfig)
 	keymap("n", config.mapping.editMacro, editMacro, { desc = icon .. "Edit Macro" })
 	keymap("n", config.mapping.yankMacro, yankMacro, { desc = icon .. "Yank Macro" })
 	-- stylua: ignore
-	keymap("n", config.mapping.deleteAllMacros, deleteAllMacros, { desc = icon .. "Delete All Macros" })
+	keymap("n", config.mapping.deleteAllMacros, deleteAllMacros,
+		{ desc = icon .. "Delete All Macros" })
 
 	-- (experimental) if true, nvim-recorder and dap will use shared keymaps:
 	-- 1) `addBreakPoint` will map to `dap.toggle_breakpoint()` outside
@@ -368,7 +388,7 @@ function M.setup(userConfig)
 	-- macro-slot instead
 	dapSharedKeymaps = config.dapSharedKeymaps or false
 	local breakPointDesc = dapSharedKeymaps and dapSharedIcon .. "Breakpoint"
-		or icon .. "Insert Macro Breakpoint."
+		 or icon .. "Insert Macro Breakpoint."
 	keymap("n", breakPointKey, addBreakPoint, { desc = breakPointDesc })
 	local playDesc = dapSharedKeymaps and dapSharedIcon .. "Continue/Play" or icon .. "Play Macro"
 	keymap("n", config.mapping.playMacro, playRecording, { desc = playDesc })
@@ -381,14 +401,17 @@ end
 ---@return string
 function M.recordingStatus()
 	if not isRecording() then return "" end
-	local icon = useNerdfontIcons and "  " or ""
-	return icon .. "Recording… [" .. macroRegs[slotIndex] .. "]"
+	if config.text.disableSlots then
+		return config.text.recording
+	else
+		return config.text.recording .. "[" .. macroRegs[slotIndex] .. "]"
+	end
 end
 
 ---returns non-empty for status line plugins.
 ---@return string
 function M.displaySlots()
-	if isRecording() then return "" end
+	if isRecording() or config.text.disableSlots then return "" end
 	local out = {}
 
 	for _, reg in pairs(macroRegs) do
@@ -408,8 +431,7 @@ function M.displaySlots()
 
 	local output = table.concat(out)
 	if output == "[ ]" then return "" end
-	local icon = useNerdfontIcons and "󰃽 " or "RECs "
-	return icon .. output
+	return config.text.recorded .. output
 end
 
 --------------------------------------------------------------------------------
