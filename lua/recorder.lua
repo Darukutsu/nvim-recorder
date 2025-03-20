@@ -6,7 +6,7 @@ local opt = vim.opt
 local keymap = vim.keymap.set
 
 -- internal vars
-local macroRegs, slotIndex, defaultLogLevel, breakCounter
+local config, macroRegs, slotIndex, defaultLogLevel, breakCounter
 
 -- Use this function to normalize keycodes (which can have multiple
 -- representations, e.g. <C-f> or <C-F>).
@@ -111,7 +111,7 @@ local function playRecording()
 			"essential",
 			vim.log.levels.ERROR
 		)
-		normal("q") -- end recording
+		normal("q")   -- end recording
 		setMacro(reg, "") -- empties macro since the recursion has been recorded there
 		return
 	end
@@ -149,13 +149,13 @@ local function playRecording()
 			breakCounter = 0
 		end
 
-	-- macro (w/ perf optimizations)
+		-- macro (w/ perf optimizations)
 	elseif usePerfOptimizations then
 		-- message to avoid confusion by the user due to performance optimizations
 		local msg = "Running macro with performance optimizations…"
 		if perf.lazyredraw then
 			msg = msg
-				.. "\nnvim might appear to freeze due to lazy redrawing. \nThis is to be expected and not a bug."
+				 .. "\nnvim might appear to freeze due to lazy redrawing. \nThis is to be expected and not a bug."
 		end
 		notify(msg, "nonessential", nil, { animate = false }) -- no animation as macro will be blocking
 
@@ -181,7 +181,7 @@ local function playRecording()
 			opt.eventignore = original.eventignore
 		end, 500)
 
-	-- macro (regular)
+		-- macro (regular)
 	else
 		normal(v.count1 .. "@" .. reg)
 	end
@@ -252,6 +252,84 @@ local function yankMacro()
 	notify("Copied Macro [" .. reg .. "]:\n" .. macroContent, "nonessential")
 end
 
+-- use these functions without Telescope -- rework this with telescope impl maybe
+local function saveMacro()
+	breakCounter = 0 -- reset breakpoint counter
+	local reg = macroRegs[slotIndex]
+	local macroContent = getMacro(reg)
+	local inputConfig = {
+		prompt = "Save Macro [" .. reg .. "] as :",
+	}
+	vim.ui.input(inputConfig, function(saveName)
+		if not saveName or saveName == "" then
+			notify(
+				"Name for macro wasn't specified",
+				"essential",
+				vim.log.levels.WARN
+			)
+			return
+		end
+
+		local path = fn.stdpath("data") .. "recorder"
+		-- create directory if it doesn't exists
+		if fn.finddir(path) ~= "" then
+			fn.mkdir(path, "p")
+		end
+
+		if fn.findfile(saveName, path) ~= "" then
+			notify(
+				"Name already exists, aborting...",
+				"essential",
+				vim.log.levels.WARN
+			)
+			return
+		end
+
+		-- with functions like this we should handle error
+		fn.writefile(macroContent, path .. saveName)
+
+		notify("Saved Macro [" .. reg .. "] as " .. saveName, "essential")
+	end)
+end
+
+local function listMacro()
+	local path = fn.stdpath("data") .. "recorder"
+	-- create directory if it doesn't exists
+	if fn.finddir(path) ~= "" then
+		fn.mkdir(path, "p")
+	end
+
+	notify(fn.readdir(path), "essential")
+end
+
+local function loadMacro()
+	breakCounter = 0 -- reset breakpoint counter
+	local reg = macroRegs[slotIndex]
+
+	local inputConfig = {
+		prompt = "Load Macro to memory:",
+	}
+	vim.ui.input(inputConfig, function(saveName)
+		if not saveName or saveName == "" then
+			notify(
+				"Name for macro wasn't specified",
+				"essential",
+				vim.log.levels.WARN
+			)
+			return
+		end
+
+		local path = fn.stdpath("data") .. "recorder"
+		local loadedMacro = fn.readfile(path .. saveName)
+		if not loadedMacro then return end -- exit if error
+
+		-- loads macro to current register
+		setMacro(reg, loadedMacro)
+
+		notify("Loaded Macro " .. saveName, "essential")
+	end)
+end
+
 local function addBreakPoint()
 	if isRecording() then
 		-- INFO nothing happens, but the key is still recorded in the macro
@@ -289,6 +367,9 @@ end
 ---@field playMacro string
 ---@field editMacro string
 ---@field yankMacro string
+---@field saveMacro string with optional tag name, use Telescope,Quickfix or other variant
+---@field listMacro string list all saved macros
+---@field loadMacro string to memory, don't play it
 ---@field deleteAllMacros string
 ---@field switchSlot string
 ---@field addBreakPoint string
@@ -308,6 +389,9 @@ function M.setup(userConfig)
 			editMacro = "cq",
 			deleteAllMacros = "dq",
 			yankMacro = "yq",
+			saveMacro = "cs",
+			listMacro = "cl",
+			loadMacro = "<leader>q",
 			addBreakPoint = "##",
 		},
 		dapSharedKeymaps = false,
@@ -323,7 +407,7 @@ function M.setup(userConfig)
 			autocmdEventsIgnore = { "TextChangedI", "TextChanged", "InsertLeave", "InsertEnter", "InsertCharPre" },
 		},
 	}
-	local config = vim.tbl_deep_extend("keep", userConfig, defaultConfig)
+	config = vim.tbl_deep_extend("keep", userConfig, defaultConfig)
 
 	-- settings to be used globally
 	perf = config.performanceOpts
@@ -357,8 +441,12 @@ function M.setup(userConfig)
 	keymap("n", config.mapping.switchSlot, switchMacroSlot, { desc = icon .. "Switch Macro Slot" })
 	keymap("n", config.mapping.editMacro, editMacro, { desc = icon .. "Edit Macro" })
 	keymap("n", config.mapping.yankMacro, yankMacro, { desc = icon .. "Yank Macro" })
+	keymap("n", config.mapping.saveMacro, saveMacro, { desc = icon .. "Save Macro" })
+	keymap("n", config.mapping.listMacro, listMacro, { desc = icon .. "List Macro" })
+	keymap("n", config.mapping.loadMacro, loadMacro, { desc = icon .. "Load Macro" })
 	-- stylua: ignore
-	keymap("n", config.mapping.deleteAllMacros, deleteAllMacros, { desc = icon .. "Delete All Macros" })
+	keymap("n", config.mapping.deleteAllMacros, deleteAllMacros,
+		{ desc = icon .. "Delete All Macros" })
 
 	-- (experimental) if true, nvim-recorder and dap will use shared keymaps:
 	-- 1) `addBreakPoint` will map to `dap.toggle_breakpoint()` outside
@@ -368,7 +456,7 @@ function M.setup(userConfig)
 	-- macro-slot instead
 	dapSharedKeymaps = config.dapSharedKeymaps or false
 	local breakPointDesc = dapSharedKeymaps and dapSharedIcon .. "Breakpoint"
-		or icon .. "Insert Macro Breakpoint."
+		 or icon .. "Insert Macro Breakpoint."
 	keymap("n", breakPointKey, addBreakPoint, { desc = breakPointDesc })
 	local playDesc = dapSharedKeymaps and dapSharedIcon .. "Continue/Play" or icon .. "Play Macro"
 	keymap("n", config.mapping.playMacro, playRecording, { desc = playDesc })
